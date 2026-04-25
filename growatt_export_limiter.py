@@ -77,11 +77,13 @@ POLL_SECONDS    = 300           # 5-minute loop
 HTTP_TIMEOUT    = 30
 STATE_FILE      = ".limiter_state.json"
 
-# Growatt V1 OpenAPI imposes a per-token rate limit (roughly 1 req/sec).
-# Hitting it raises GrowattV1ApiError with no useful message, so we space
-# consecutive calls and retry once on error.
-V1_CALL_INTERVAL = 1.5
-V1_RETRY_BACKOFF = 3.0
+# Growatt V1 OpenAPI rate limit: error_code 10012 / "error_frequently_access"
+# fires both on too-close consecutive calls AND on cumulative volume in a
+# sliding window. We space consecutive calls a few seconds apart and, if a
+# 10012 trips anyway, back off long enough for the window to clear before
+# retrying. These values are conservative; tighten if you find them slow.
+V1_CALL_INTERVAL = 3.0
+V1_RETRY_BACKOFF = 30.0
 
 REGION_BASES = {
     "eu": "https://openapi.growatt.com",
