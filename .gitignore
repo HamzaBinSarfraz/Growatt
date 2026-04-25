@@ -1,0 +1,11 @@
+.env
+.limiter_state.json
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+.claude/
+.DS_Store
