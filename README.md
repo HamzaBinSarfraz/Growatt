@@ -5,8 +5,9 @@ Polls the Growatt OpenAPI v1, and when live AC power exceeds the configured grid
 ceiling (default 8500 W), drops the inverter's Active Power Rate from 100 % to 50 %.
 When output drops back below the limit (with hysteresis), it restores 100 %.
 
-The inverter serial number is set in the script via `INVERTER_SN` near the top of
-[growatt_export_limiter.py](growatt_export_limiter.py).
+The token and the inverter serial number are read from environment variables
+(`GROWATT_TOKEN`, `GROWATT_INVERTER_SN`) — typically loaded from a local `.env`
+file via [python-dotenv](https://pypi.org/project/python-dotenv/).
 
 ---
 
@@ -42,30 +43,31 @@ often rejected by the V1 endpoints.
 1. Open ShinePhone → Me → Settings → API token (menu varies by version).
 2. Generate / copy the token.
 
-### 5. Set the token
+### 5. Configure `.env`
 
-Copy the template and paste your token in:
+Copy the template:
 
 ```sh
 cp .env.example .env
-# Edit .env — set GROWATT_TOKEN=<your token>
 ```
 
-`.env` is gitignored, so your token won't be committed.
+Then edit `.env` and fill in both values:
 
-### 6. Set your inverter serial
+```
+GROWATT_TOKEN=<your token from step 4>
+GROWATT_INVERTER_SN=<your inverter's device_sn>
+```
 
-Open [growatt_export_limiter.py](growatt_export_limiter.py) and update the
-`INVERTER_SN` constant near the top to match your inverter's serial (the value the
-Growatt cloud reports as `device_sn`). If you don't know it, run the diagnostic:
+`.env` is gitignored, so neither value will be committed.
+
+If you don't know your inverter's serial, run the diagnostic — it dumps every
+plant and device on your account so you can copy the right SN:
 
 ```sh
 python diag_list_devices.py
 ```
 
-It dumps every plant and device on your account so you can copy the right SN.
-
-### 7. Dry-run a single cycle
+### 6. Dry-run a single cycle
 
 This reads from the cloud and **logs** what it would write — but never actually
 writes. Use this to confirm everything is wired up.
@@ -82,7 +84,7 @@ You should see:
 - `Live AC power: N W` — the current reading. Will be 0 W at night or if the
   inverter is offline.
 
-### 8. Dry-run the persistent loop
+### 7. Dry-run the persistent loop
 
 Same as above but loops every 5 minutes. Stop with `Ctrl-C`.
 
@@ -90,7 +92,7 @@ Same as above but loops every 5 minutes. Stop with `Ctrl-C`.
 python growatt_export_limiter.py
 ```
 
-### 9. First live write (when inverter is online and producing)
+### 8. First live write (when inverter is online and producing)
 
 Only do this when you've seen a non-zero `Live AC power` in dry-run. Single live
 cycle:
@@ -102,7 +104,7 @@ python growatt_export_limiter.py --live --once
 A successful write logs `Active power rate set to 50%` (or `100%`) and saves the
 new rate to `.limiter_state.json`.
 
-### 10. Run continuously
+### 9. Run continuously
 
 Two options:
 
@@ -187,7 +189,8 @@ to release. Network code is intentionally not tested.
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
-| `<SN> not in device_list for plant <id>` | Wrong `INVERTER_SN`. Run `diag_list_devices.py` to see the actual SN. |
+| `GROWATT_INVERTER_SN not set` | Add it to `.env`. |
+| `<SN> not in device_list for plant <id>` | Wrong `GROWATT_INVERTER_SN`. Run `diag_list_devices.py` to see the actual SN. |
 | `code=10012 msg=error_frequently_access` | Rate-limited. Wait 60 s. |
 | `code=10003` / `permission denied` | Token invalid or wrong scope. Regenerate from ShinePhone. |
 | `Device ... is currently OFFLINE` | Inverter not reporting. Wait for sunrise / check Wi-Fi. |

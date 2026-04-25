@@ -68,7 +68,7 @@ except ImportError:
 # Configuration
 # ---------------------------------------------------------------------------
 API_TOKEN       = os.environ.get("GROWATT_TOKEN", "PUT_YOUR_TOKEN_HERE")
-INVERTER_SN     = "REDACTED_VIA_ENV"
+INVERTER_SN     = os.environ.get("GROWATT_INVERTER_SN", "").strip()
 EXPORT_LIMIT_W  = 8500          # grid export ceiling
 HYSTERESIS_W    = 200           # avoid flapping near the limit
 CURTAILED_PCT   = 50            # rate when curtailing (50% of 15 kW ≈ 7.5 kW)
@@ -188,6 +188,9 @@ def open_api_v1() -> "growattServer.OpenApiV1":
     """Token-authenticated client for read operations."""
     if not API_TOKEN or API_TOKEN.startswith("PUT_YOUR_TOKEN"):
         sys.exit("GROWATT_TOKEN not set (env var or .env file).")
+    if not INVERTER_SN:
+        sys.exit("GROWATT_INVERTER_SN not set (env var or .env file). "
+                 "Run `python diag_list_devices.py` to find it.")
     return growattServer.OpenApiV1(token=API_TOKEN)
 
 
