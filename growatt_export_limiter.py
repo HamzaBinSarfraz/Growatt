@@ -412,6 +412,13 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
 def run_cycle(api, plant_id: int, current_pct: int,
               openapi_base: str, dry_run: bool) -> int:
     """One iteration of the loop. Returns the (possibly updated) current_pct."""
+    # Refresh the state file every cycle so external readers (e.g.
+    # read_active_power_rate.py) always have a value, even when we're
+    # holding the rate without writing. The Growatt cloud has no public
+    # read endpoint for pv_active_p_rate on MAX-class inverters, so this
+    # local file is the source of truth for what the limiter has commanded.
+    save_state(current_pct)
+
     power_w = get_current_power_w(api, plant_id)
     if power_w is None:
         log.warning("Skipping cycle: no power reading.")
