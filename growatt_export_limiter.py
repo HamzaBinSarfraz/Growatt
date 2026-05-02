@@ -126,6 +126,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("growatt-limiter")
 
+# Highlight the active-power-rate value so it's easy to spot in a stream
+# of log lines. ANSI codes only when stdout is a real terminal — cron and
+# file redirection stay clean.
+_USE_COLOR = sys.stdout.isatty()
+def _cyan(s: str) -> str:
+    return f"\033[96m{s}\033[0m" if _USE_COLOR else s
+
 
 # ---------------------------------------------------------------------------
 # Pure decision logic (unit-tested in tests/)
@@ -424,16 +431,19 @@ def run_cycle(api, plant_id: int, current_pct: int,
         log.warning("Skipping cycle: no power reading.")
         return current_pct
 
-    log.info("Live AC power: %.0f W  (current rate=%d%%)", power_w, current_pct)
+    log.info("Live AC power: %.0f W  (%s)", power_w,
+             _cyan(f"current rate={current_pct}%"))
 
     next_pct = decide_next_rate(power_w, current_pct, EXPORT_LIMIT_W, HYSTERESIS_W)
     if next_pct == current_pct:
         return current_pct
 
     if next_pct == CURTAILED_PCT:
-        log.info("Above limit -> curtailing to %d%%", CURTAILED_PCT)
+        log.info("Above limit -> curtailing to %s",
+                 _cyan(f"{CURTAILED_PCT}%"))
     else:
-        log.info("Output well below limit -> releasing to %d%%", FULL_PCT)
+        log.info("Output well below limit -> releasing to %s",
+                 _cyan(f"{FULL_PCT}%"))
 
     if dry_run:
         log.info("[dry-run] Would POST pv_active_p_rate=%d to %s%s",
