@@ -31,11 +31,11 @@ How to grab the cookie:
        (or paste the entire `cookie:` header value if you prefer.)
 
 Note on the read response — `activeRate` semantics:
-    activeRate: 0   → no override active; inverter runs at default 100%
-    activeRate: N   → override commanded to N% (1..100)
-    So a fresh inverter that has never been curtailed reads 0, NOT
-    "running at 0% / shut down". This was verified by setting a non-zero
-    value via the dashboard and observing the field update.
+    activeRate is the commanded percentage cap (0..100), matching what
+    the dashboard's Set Active Power input shows. Verified by reading
+    while the dashboard showed 100% (response: '100') — i.e. this is
+    the cloud-side source of truth. Mirror it into local state if you
+    need offline access.
 """
 import json
 import os
@@ -82,19 +82,12 @@ def _post(data: dict) -> dict:
 
 
 def get_active() -> int | None:
-    """Return the commanded active-power rate as a percentage, or None.
-
-    The returned value is the override (0 means "no override / 100%
-    default"; 1..100 means an explicit cap is set).
-    """
+    """Return the commanded active-power rate as a percentage (0..100)."""
     body = _post({"action": "readAllMaxParam", "serialNum": SN})
     if not body.get("success"):
         sys.exit(f"Read failed: {body}")
     msg = body.get("msg", {})
     raw = msg.get("activeRate")
-    print(f"raw response field activeRate = {raw!r}")
-    print(f"  (0 = no override, runs at 100%; 1-100 = commanded cap)")
-    print(f"  full msg keys: {sorted(msg.keys())[:10]}... ({len(msg)} total)")
     try:
         return int(raw)
     except (TypeError, ValueError):
@@ -121,8 +114,7 @@ def main():
         sys.exit("usage: inverter_rate.py {get | set <percent>}")
     if sys.argv[1] == "get":
         rate = get_active()
-        print(f"\npv_active_p_rate override = {rate}"
-              + (" (no override, default 100%)" if rate == 0 else "%"))
+        print(f"pv_active_p_rate = {rate}%")
     else:
         if len(sys.argv) < 3:
             sys.exit("usage: inverter_rate.py set <percent>")
