@@ -1,21 +1,47 @@
 #!/usr/bin/env python3
-"""Get / set pv_active_p_rate via the legacy ShineServer API.
+"""Get / set pv_active_p_rate via the legacy ShineServer endpoints.
 
-This hits server.growatt.com — the same backend the web portal "Read"
-and "Yes" buttons use — via session login with username + password.
-It is independent of the V1 OpenAPI token used by the limiter.
+Endpoints (confirmed by network capture — the same backend the web
+portal Setting dialog uses):
+
+    Read:  POST https://server.growatt.com/tcpSet.do
+           data = {"action": "readAllMaxParam", "serialNum": <SN>}
+           Returns a big JSON with every MAX parameter; the curtailment
+           override lives in `msg.activeRate`.
+
+    Set:   POST https://server.growatt.com/tcpSet.do
+           data = {"action": "maxSet", "type": "pv_active_p_rate",
+                   "serialNum": <SN>, "param1": "<pct>",
+                   "param2": "0", "param3": "0"}
+
+Auth: Growatt's WAF blocks the public login endpoint from non-browser
+clients (403). Workaround — copy the JSESSIONID cookie from a logged-in
+browser session into GROWATT_COOKIE in .env. Cookies expire after some
+hours; refresh by re-copying when reads/writes start failing.
 
 Usage:
     python inverter_rate.py get
     python inverter_rate.py set 60
 
-Required env (in .env):
-    GROWATT_USERNAME       — your ShinePhone account
-    GROWATT_PASSWORD       — its password
-    GROWATT_INVERTER_SN    — the inverter device_sn
+How to grab the cookie:
+    1. Open https://server.growatt.com in Chrome and log in.
+    2. DevTools (Cmd+Opt+I) → Application → Cookies → server.growatt.com.
+    3. Copy the *value* of the JSESSIONID row.
+    4. In .env:  GROWATT_COOKIE=JSESSIONID=<that value>
+       (or paste the entire `cookie:` header value if you prefer.)
+
+Note on the read response — `activeRate` semantics:
+    activeRate: 0   → no override active; inverter runs at default 100%
+    activeRate: N   → override commanded to N% (1..100)
+    So a fresh inverter that has never been curtailed reads 0, NOT
+    "running at 0% / shut down". This was verified by setting a non-zero
+    value via the dashboard and observing the field update.
 """
+import json
 import os
 import sys
+
+import requests
 
 try:
     from dotenv import load_dotenv
@@ -23,68 +49,84 @@ try:
 except ImportError:
     pass
 
-import growattServer
+BASE = "https://server.growatt.com"
+SN     = os.environ.get("GROWATT_INVERTER_SN", "").strip()
+COOKIE = os.environ.get("GROWATT_COOKIE", "").strip()
 
-USERNAME = os.environ.get("GROWATT_USERNAME", "").strip()
-PASSWORD = os.environ.get("GROWATT_PASSWORD", "").strip()
-SN       = os.environ.get("GROWATT_INVERTER_SN", "").strip()
+if not SN:
+    sys.exit("GROWATT_INVERTER_SN not set in .env")
+if not COOKIE:
+    sys.exit("GROWATT_COOKIE not set in .env. See module docstring for how "
+             "to grab JSESSIONID from your browser.")
 
-if not USERNAME or not PASSWORD or not SN:
-    sys.exit("Set GROWATT_USERNAME, GROWATT_PASSWORD, GROWATT_INVERTER_SN in .env")
+HEADERS = {
+    "Cookie":     COOKIE,
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/124.0.0.0 Safari/537.36",
+    "X-Requested-With": "XMLHttpRequest",
+    "Accept":     "text/plain, */*; q=0.01",
+    "Origin":     BASE,
+    "Referer":    BASE + "/index",
+}
 
 
-def login():
-    api = growattServer.GrowattApi(add_random_user_id=True)
-    res = api.login(USERNAME, PASSWORD)
-    if not res or not res.get("success"):
-        sys.exit(f"Login failed: {res}")
-    return api
-
-
-def get_rate(api):
-    """Try to read the current pv_active_p_rate.
-
-    The legacy API has no documented helper for MAX-class settings reads.
-    inverter_detail returns live data only (output power etc.), not the
-    commanded rate. The web UI's Read button POSTs to /newTcpsetAPI.do
-    with op='spaGetApi' (mirror of spaSetApi used for writes). We call
-    it directly via the same session.
-    """
-    r = api.session.post(
-        api.get_url("newTcpsetAPI.do"),
-        params={
-            "op": "spaGetApi",
-            "serialNum": SN,
-            "type": "pv_active_p_rate",
-        },
-        timeout=30,
-    )
-    print(f"HTTP {r.status_code}  CT={r.headers.get('Content-Type')}")
-    print("BODY:", r.text[:600])
+def _post(data: dict) -> dict:
+    r = requests.post(BASE + "/tcpSet.do", data=data, headers=HEADERS, timeout=30)
+    if r.status_code != 200:
+        sys.exit(f"HTTP {r.status_code}: {r.text[:200]}")
     try:
         return r.json()
     except ValueError:
+        sys.exit(f"Response was not JSON (cookie may be expired):\n{r.text[:300]}")
+
+
+def get_active() -> int | None:
+    """Return the commanded active-power rate as a percentage, or None.
+
+    The returned value is the override (0 means "no override / 100%
+    default"; 1..100 means an explicit cap is set).
+    """
+    body = _post({"action": "readAllMaxParam", "serialNum": SN})
+    if not body.get("success"):
+        sys.exit(f"Read failed: {body}")
+    msg = body.get("msg", {})
+    raw = msg.get("activeRate")
+    print(f"raw response field activeRate = {raw!r}")
+    print(f"  (0 = no override, runs at 100%; 1-100 = commanded cap)")
+    print(f"  full msg keys: {sorted(msg.keys())[:10]}... ({len(msg)} total)")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
         return None
 
 
-def set_rate(api, percent):
+def set_active(percent: int) -> dict:
     if not 0 <= percent <= 100:
         sys.exit("percent must be 0-100")
-    res = api.update_ac_inverter_setting(SN, "pv_active_p_rate", [str(percent)])
-    print(res)
-    return res
+    body = _post({
+        "action":    "maxSet",
+        "type":      "pv_active_p_rate",
+        "serialNum": SN,
+        "param1":    str(percent),
+        "param2":    "0",
+        "param3":    "0",
+    })
+    print(json.dumps(body, indent=2))
+    return body
 
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in ("get", "set"):
         sys.exit("usage: inverter_rate.py {get | set <percent>}")
-    api = login()
     if sys.argv[1] == "get":
-        get_rate(api)
+        rate = get_active()
+        print(f"\npv_active_p_rate override = {rate}"
+              + (" (no override, default 100%)" if rate == 0 else "%"))
     else:
         if len(sys.argv) < 3:
             sys.exit("usage: inverter_rate.py set <percent>")
-        set_rate(api, int(sys.argv[2]))
+        set_active(int(sys.argv[2]))
 
 
 if __name__ == "__main__":
